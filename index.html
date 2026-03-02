@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pizza Nearby - Slimme Selectie</title>
+    <style>
+        :root { --ita-red: #ce2b37; --ita-green: #008c45; --ita-gold: #f1c40f; --dark: #2d2d2d; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; background: #f5f5f5; margin: 0; padding-bottom: 50px; }
+        
+        header { background: white; padding: 20px; text-align: center; border-bottom: 5px solid var(--ita-green); }
+        h1 { margin: 0; color: var(--ita-red); text-transform: uppercase; font-size: 1.4rem; }
+        #status-msg { font-size: 0.75rem; color: #777; margin-top: 5px; }
+
+        /* Sorteer Knoppen */
+        .filters { display: flex; justify-content: space-around; background: white; padding: 10px; position: sticky; top: 0; z-index: 100; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .filter-btn { background: #eee; border: none; padding: 8px 15px; border-radius: 20px; font-size: 0.7rem; font-weight: bold; cursor: pointer; color: #666; }
+        .filter-btn.active { background: var(--ita-green); color: white; }
+
+        #pizza-list { padding: 15px; max-width: 500px; margin: 0 auto; }
+        
+        /* Card Styling */
+        .pizza-card { 
+            background: white; margin-bottom: 12px; padding: 15px; border-radius: 12px; 
+            display: flex; justify-content: space-between; align-items: center; 
+            border: 1px solid #eee; transition: 0.2s;
+        }
+        
+        /* Premium Styling */
+        .premium-card { border: 2px solid var(--ita-gold); background: #fffdf2; box-shadow: 0 4px 10px rgba(241, 196, 15, 0.15); }
+        
+        .info h2 { margin: 0; font-size: 1rem; color: var(--dark); }
+        .distance-tag { font-size: 0.75rem; color: #888; font-weight: bold; }
+        
+        .price-box { text-align: right; min-width: 80px; }
+        .price-tag { color: var(--ita-green); font-weight: 900; font-size: 1.1rem; display: block; }
+        .price-label { font-size: 0.55rem; color: #999; text-transform: uppercase; }
+
+        /* Knoppen */
+        .btn-action { 
+            display: inline-block; margin-top: 8px; font-size: 0.75rem; 
+            text-decoration: none; font-weight: bold; padding: 6px 15px; border-radius: 6px; 
+        }
+        .btn-ga { color: var(--ita-red); border: 1px solid var(--ita-red); }
+        .btn-bestel { background: var(--ita-red); color: white; border: 1px solid var(--ita-red); }
+
+        footer { background: var(--dark); color: white; padding: 30px; text-align: center; margin-top: 20px; }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>🍕 Pizza Nearby</h1>
+    <div id="status-msg">Locatie bepalen...</div>
+</header>
+
+<div class="filters">
+    <button class="filter-btn active" onclick="updateSort('distance', this)">DICHTSTBIJ</button>
+    <button class="filter-btn" onclick="updateSort('price', this)">GOEDKOOPSTE</button>
+</div>
+
+<div id="pizza-list">
+    <p style="text-align:center; padding:20px;">Laden...</p>
+</div>
+
+<footer>
+    <p style="font-size: 0.8rem;"><strong>Pizza Nearby</strong></p>
+    <p style="font-size: 0.6rem; opacity: 0.5;">Steun lokaal. Bestel direct.</p>
+</footer>
+
+<script>
+    let userLat, userLon;
+    let rawData = []; // Hier slaan we de gevonden pizzeria's op
+    let currentSort = 'distance';
+
+    // 1. Onze Premium Partners (Database)
+    const premiumPartners = {
+        "De Pizzabakkers": { link: "https://www.depizzabakkers.nl", price: 9.50 },
+        "Eetcafe Menora": { link: "http://www.menora.nl", price: 8.50 },
+        "Kebec Corner": { link: "https://kebec.nl", price: 11.00 }
+    };
+
+    // 2. Haversine formule om afstand in KM te berekenen
+    function getDistance(lat1, lon1, lat2, lon2) {
+        const R = 6371; // Straal van de aarde
+        const dLat = (lat2 - lat1) * Math.PI / 180;
+        const dLon = (lon2 - lon1) * Math.PI / 180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+        const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        return R * c;
+    }
+
+    // 3. Locatie ophalen
+    window.onload = function() {
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(pos => {
+                userLat = pos.coords.latitude;
+                userLon = pos.coords.longitude;
+                fetchPizza();
+            }, () => {
+                // Fallback naar Rotterdam Centrum
+                userLat = 51.9225; userLon = 4.47917;
+                document.getElementById('status-msg').innerText = "Locatie geweigerd. We tonen Rotterdam.";
+                fetchPizza();
+            });
+        }
+    };
+
+    async function fetchPizza() {
+        const query = `[out:json];node["amenity"~"restaurant|fast_food"]["cuisine"~"pizza"](around:3000, ${userLat}, ${userLon});out;`;
+        const url = "https://overpass-api.de/api/interpreter?data=" + encodeURIComponent(query);
+
+        try {
+            const res = await fetch(url);
+            const data = await res.json();
+            
+            // Verwerk de data: voeg afstand en prijs toe
+            rawData = data.elements.map(p => {
+                const name = p.tags.name || "Pizzeria";
+                const isPremium = premiumPartners[name] !== undefined;
+                const dist = getDistance(userLat, userLon, p.lat, p.lon);
+                // Prijs: echte prijs voor premium, anders een realistische schatting op basis van naam-lengte (voor sortering)
+                const price = isPremium ? premiumPartners[name].price : (8 + (name.length % 5)); 
+                
+                return { ...p, name, isPremium, dist, price };
+            });
+
+            updateSort(currentSort, document.querySelector('.active'));
+        } catch (e) {
+            document.getElementById('pizza-list').innerHTML = "Fout bij laden.";
+        }
+    }
+
+    function updateSort(criteria, btn) {
+        currentSort = criteria;
+        document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+
+        if (criteria === 'distance') {
+            rawData.sort((a, b) => a.dist - b.dist);
+        } else {
+            rawData.sort((a, b) => a.price - b.price);
+        }
+        render();
+    }
+
+    function render() {
+        const list = document.getElementById('pizza-list');
+        list.innerHTML = '';
+        document.getElementById('status-msg').innerText = `🍕 ${rawData.length} pizzeria's gevonden`;
+
+        rawData.forEach(p => {
+            const card = document.createElement('div');
+            card.className = `pizza-card ${p.isPremium ? 'premium-card' : ''}`;
+            
+            const actionBtn = p.isPremium 
+                ? `<a href="${premiumPartners[p.name].link}" target="_blank" class="btn-action btn-bestel">BESTEL</a>`
+                : `<a href="https://www.google.com/maps/dir/?api=1&destination=${p.lat},${p.lon}" target="_blank" class="btn-action btn-ga">GA</a>`;
+
+            card.innerHTML = `
+                <div class="info">
+                    <h2>${p.name} ${p.isPremium ? '👑' : ''}</h2>
+                    <span class="distance-tag">${p.dist.toFixed(1)} km van jou</span><br>
+                    ${actionBtn}
+                </div>
+                <div class="price-box">
+                    <span class="price-label">${p.isPremium ? 'PRIJS' : 'VANAF'}</span>
+                    <span class="price-tag">€${p.price.toFixed(2)}</span>
+                </div>
+            `;
+            list.appendChild(card);
+        });
+    }
+</script>
+
+</body>
+</html>
